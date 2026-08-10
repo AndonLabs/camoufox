@@ -1,0 +1,12 @@
+diff --git a/security/rlbox/rlbox.mozbuild b/security/rlbox/rlbox.mozbuild
+--- a/security/rlbox/rlbox.mozbuild
++++ b/security/rlbox/rlbox.mozbuild
+@@ -4,7 +4,7 @@
+ 
+ 
+ @template
+-def RLBoxLibrary(name, use_segue=True):
++def RLBoxLibrary(name, use_segue=False):
+     WASM_SOURCES += [
+         "/memory/mozalloc/mozalloc.cpp",
+         "/third_party/rlbox_wasm2c_sandbox/c_src/wasm2c_sandbox_wrapper.c",
