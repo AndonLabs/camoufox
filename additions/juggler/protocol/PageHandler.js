@@ -525,6 +525,21 @@ export class PageHandler {
       if (win.windowUtils.flushApzRepaints())
         await helper.awaitTopic('apz-repaints-flushed');
 
+      // Native mouse dispatch rounds to device pixels. A CSS point inside the
+      // browser can round into its chrome (e.g. top=51.4, y=0 -> 51), which
+      // never produces a renderer ack and blocks the global input queue.
+      // Use the real widget transform, not the spoofable window.devicePixelRatio.
+      const deviceRect = win.windowUtils.toTopLevelWidgetRect(
+        boundingBox.left, boundingBox.top, boundingBox.width, boundingBox.height);
+      const scaleX = deviceRect.width / boundingBox.width;
+      const scaleY = deviceRect.height / boundingBox.height;
+      const minX = boundingBox.left + (Math.ceil(deviceRect.left) - deviceRect.left) / scaleX;
+      const minY = boundingBox.top + (Math.ceil(deviceRect.top) - deviceRect.top) / scaleY;
+      const maxX = boundingBox.left + (Math.ceil(deviceRect.right) - 1 - deviceRect.left) / scaleX;
+      const maxY = boundingBox.top + (Math.ceil(deviceRect.bottom) - 1 - deviceRect.top) / scaleY;
+      if (minX > maxX || minY > maxY)
+        throw new Error('Browser viewport contains no addressable device pixel');
+
       const watcher = new EventWatcher(this._pageEventSink, types, this._pendingEventWatchers);
       // Dispatch a single synthesized mouse event to the renderer and return a
       // promise that resolves once the renderer acks it.
@@ -532,8 +547,8 @@ export class PageHandler {
         // This dispatches to the renderer synchronously.
         const jugglerEventId = win.windowUtils.jugglerSendMouseEvent(
           eventType,
-          eventX + boundingBox.left,
-          eventY + boundingBox.top,
+          Math.max(minX, Math.min(maxX, eventX + boundingBox.left)),
+          Math.max(minY, Math.min(maxY, eventY + boundingBox.top)),
           button,
           clickCount,
           modifiers,

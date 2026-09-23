@@ -107,7 +107,20 @@ jobs:
           CARGO_BUILD_JOBS: "1"
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
+      - name: Verify mouse input on the packaged browser
+        if: matrix.target == 'linux' && matrix.arch == 'x86_64'
+        run: |
+          python3 -m pip install playwright==1.57.0
+          python3 -m playwright install-deps firefox
+          sudo apt-get install -y xvfb xauth unzip
+          mkdir -p "$RUNNER_TEMP/input-regression"
+          unzip -q dist/camoufox-*-lin.x86_64.zip -d "$RUNNER_TEMP/input-regression"
+          xvfb-run -a -s '-screen 0 3200x2400x24' \
+            python3 tests/patches/mouse-coordinate-rounding.py \
+            "$RUNNER_TEMP/input-regression/camoufox-bin"
+
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}
