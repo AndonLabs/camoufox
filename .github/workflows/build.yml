@@ -9,6 +9,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      # Match the last successful Firefox 152 build. The runner's moving stable
+      # toolchain (1.98.1) fails Firefox's Rust host-target detection.
+      RUSTUP_TOOLCHAIN: "1.97.1"
     strategy:
       matrix:
         target: [linux]
@@ -47,6 +51,12 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 1
+
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustc --version
+          cargo --version
 
       - name: Set up Go
         uses: actions/setup-go@v2
