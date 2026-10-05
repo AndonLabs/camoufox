@@ -33,6 +33,11 @@ device-pixel transform. See [input dispatch](docs/input-dispatch.md).
 creates a draft GitHub release after the packaged mouse regression passes.
 The upstream PyPI/npm release workflow is disabled in this fork.
 
+The build targets `ubuntu-latest-16-cores`, the organization's 16-core Ubuntu
+x64 runner. Its runner group must allow this public repository. Rust
+compilation uses up to eight parallel jobs while leaving memory headroom for
+C++ compilation and linking.
+
 Local coordinate checks:
 
 ```bash

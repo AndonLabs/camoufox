@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest-16-cores
     env:
       BUILD_TARGET: linux,x86_64
     strategy:
@@ -69,8 +69,11 @@ jobs:
           fi
           sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
 
-      - name: Check disk space
-        run: df -h
+      - name: Show build resources
+        run: |
+          nproc
+          free -h
+          df -h
 
       - name: Install dependencies
         run: |
@@ -108,9 +111,8 @@ jobs:
 
       - name: Build
         env:
-          # Cap Rust parallelism to lower peak memory (avoids OOM/SIGTERM).
-          # Tune to taste: higher = faster but more RAM.
-          CARGO_BUILD_JOBS: "1"
+          # Leave memory headroom for concurrent C++ compilation and linking.
+          CARGO_BUILD_JOBS: "8"
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
       - name: Verify mouse input on the packaged browser
