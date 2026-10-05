@@ -387,9 +387,11 @@ export class PageAgent {
       nsFiles = await Promise.all(files.map(filePath => File.createFromFileName(filePath)));
     }
     unsafeObject.mozSetFileArray(nsFiles);
+    // The file picker's own shape (DispatchEvents(), HTMLInputElement.cpp).
+    // Upstream marks both cancelable and composed, which reads as synthetic.
     const events = [
-      new (frame.domWindow().Event)('input', { bubbles: true, cancelable: true, composed: true }),
-      new (frame.domWindow().Event)('change', { bubbles: true, cancelable: true, composed: true }),
+      new (frame.domWindow().Event)('input', { bubbles: true, composed: true }),
+      new (frame.domWindow().Event)('change', { bubbles: true }),
     ];
     for (const event of events)
       unsafeObject.dispatchEvent(event);
@@ -470,28 +472,64 @@ export class PageAgent {
     return {x: x1, y: y1, width: x2 - x1, height: y2 - y1};
   }
 
+  // Camoufox: characters that need Shift on a US layout. A person typing "H"
+  // or "!" presses Shift first, so a real keydown carries shiftKey=true and is
+  // bracketed by Shift keydown/keyup (code ShiftLeft, location 1). Playwright's
+  // keyboard.type() never presses Shift, which was a one-line tell (measured
+  // 2026-09-14: keydown.which never 16, location never 1).
+  _needsShift(text) {
+    return typeof text === 'string' && text.length === 1 && /[A-Z~!@#$%^&*()_+{}|:"<>?]/.test(text);
+  }
+
   async _dispatchKeyEvent({type, keyCode, code, key, repeat, location, text}) {
     const frame = this._frameTree.mainFrame();
     const tip = frame.textInputProcessor();
-    let keyEvent = new (frame.domWindow().KeyboardEvent)("", {
+    const KeyboardEvent = frame.domWindow().KeyboardEvent;
+    if (key === 'Shift')
+      this._realShiftDown = type === 'keydown';
+    const autoShift = type === 'keydown' && !this._realShiftDown && !this._autoShiftKey && this._needsShift(text);
+    if (autoShift) {
+      tip.keydown(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16, shiftKey: true }), 0);
+      this._autoShiftKey = key;
+      // A person presses Shift tens of ms before the key it modifies; 0 ms
+      // between the two keydowns is a scripted-typing tell.
+      await new Promise(resolve => setTimeout(resolve, 35 + Math.random() * 55));
+    }
+    const shiftKey = this._realShiftDown || !!this._autoShiftKey;
+    let keyEvent = new KeyboardEvent("", {
       key,
       code,
       location,
       repeat,
-      keyCode
+      keyCode,
+      shiftKey,
     });
     if (type === 'keydown') {
-      if (text && text !== key) {
-        tip.commitCompositionWith(text, keyEvent);
-      } else {
-        const flags = 0;
-        tip.keydown(keyEvent, flags);
+      try {
+        if (text && text !== key) {
+          tip.commitCompositionWith(text, keyEvent);
+        } else {
+          const flags = 0;
+          tip.keydown(keyEvent, flags);
+        }
+      } catch (e) {
+        // Do not leave Shift latched in the input processor.
+        if (autoShift) {
+          tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
+          this._autoShiftKey = null;
+        }
+        throw e;
       }
     } else if (type === 'keyup') {
       if (text)
         throw new Error(`keyup does not support text option`);
       const flags = 0;
       tip.keyup(keyEvent, flags);
+      if (this._autoShiftKey === key) {
+        this._autoShiftKey = null;
+        await new Promise(resolve => setTimeout(resolve, 20 + Math.random() * 45));
+        tip.keyup(new KeyboardEvent("", { key: 'Shift', code: 'ShiftLeft', location: 1, keyCode: 16 }), 0);
+      }
     } else {
       throw new Error(`Unknown type ${type}`);
     }
@@ -563,7 +601,7 @@ export class PageAgent {
         modifiers,
         false /*aIgnoreRootScrollFrame*/,
         0.0 /*pressure*/,
-        0 /*inputSource*/,
+        win.MouseEvent.MOZ_SOURCE_MOUSE /*inputSource*/,
         true /*isDOMEventSynthesized*/,
         false /*isWidgetEventSynthesized*/,
         0 /*buttons*/,
@@ -581,37 +619,15 @@ export class PageAgent {
 
   async _insertText({text}) {
     const frame = this._frameTree.mainFrame();
-    const win = frame.domWindow();
-    const doc = win.document;
-    const active = doc.activeElement;
-    // Fast path: if focus is on an editable input/textarea, set the value
-    // directly and fire a single trusted-shape input event. This avoids the
-    // double `input` event we get from nsITextInputProcessor on Firefox 146
-    // (one for compositionupdate, one after compositionend), and matches the
-    // upstream test expectation of exactly one `input` event.
-    const isEditableField = active && (
-      (active.tagName === 'INPUT' && /^(text|search|url|tel|email|password|number|)$/i.test(active.type || '')) ||
-      active.tagName === 'TEXTAREA'
-    );
-    if (isEditableField) {
-      const start = active.selectionStart ?? active.value.length;
-      const end = active.selectionEnd ?? active.value.length;
-      const before = active.value.slice(0, start);
-      const after = active.value.slice(end);
-      active.value = before + text + after;
-      const caret = (before + text).length;
-      try { active.setSelectionRange(caret, caret); } catch (e) {}
-      const InputEvent = win.InputEvent;
-      active.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        cancelable: false,
-        composed: true,
-        inputType: 'insertText',
-        data: text,
-      }));
+    // A focused text control inserts through its own editor, as a keystroke
+    // does: one beforeinput/input pair, maxlength applies, and the value counts
+    // as user-edited so blur fires `change`. nsITextInputProcessor would fire
+    // `input` twice there (compositionupdate and compositionend).
+    const editor = frame.domWindow().document.activeElement?.editor;
+    if (editor) {
+      editor.insertText(text);
       return;
     }
-    // Fallback: contenteditable / other editing hosts use the TIP path.
     frame.textInputProcessor().commitCompositionWith(text);
   }
 

@@ -4,13 +4,13 @@ export
 cf_source_dir := camoufox-$(version)-$(release)
 ff_source_tarball := firefox-$(version).source.tar.xz
 
-debs := python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev
-rpms := python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel
-pacman := python python-pip p7zip go msitools wget aria2 sqlite
+debs := python3 python3-dev python3-pip p7zip-full msitools wget aria2 libsqlite3-dev
+rpms := python3 python3-devel p7zip msitools wget aria2 sqlite-devel
+pacman := python python-pip p7zip msitools wget aria2 sqlite
 
-.PHONY: help fetch setup setup-minimal clean set-target distclean build package \
-        build-launcher check-arch revert edits run bootstrap mozbootstrap dir \
-        package-linux package-macos package-windows vcredist_arch patch unpatch \
+.PHONY: help fetch fetch-fonts fonts-extract fonts-check fonts-clean setup setup-minimal clean set-target distclean build package \
+        revert run bootstrap mozbootstrap dir \
+        package-linux package-macos package-windows patch unpatch diff \
         workspace check-arg edit-cfg ff-dbg tests update-ubo-assets generate-assets-car \
         setup-macos-sdk
 
@@ -22,8 +22,6 @@ help:
 	@echo "  mozbootstrap    - Sets up mach"
 	@echo "  dir             - Prepare Camoufox source directory with BUILD_TARGET"
 	@echo "  revert          - Kill all working changes"
-	@echo "  edits           - Camoufox developer UI"
-	@echo "  build-launcher  - Build launcher"
 	@echo "  clean           - Remove build artifacts"
 	@echo "  distclean       - Remove everything including downloads"
 	@echo "  build           - Build Camoufox"
@@ -81,6 +79,23 @@ ff-dbg: setup
 revert:
 	cd $(cf_source_dir) && git reset --hard unpatched
 
+# The font bundle is a release asset, not repo content (see
+# scripts/fetch-fonts.py for why). fetch-fonts downloads and verifies the
+# archive; fonts-extract unpacks it to bundle/fonts/, which every font tool and
+# `make package-*` needs. Both are no-ops once satisfied, so they are cheap to
+# depend on.
+fetch-fonts:
+	python3 scripts/fetch-fonts.py
+
+fonts-extract:
+	python3 scripts/fetch-fonts.py --extract
+
+fonts-check:
+	python3 scripts/fetch-fonts.py --check
+
+fonts-clean:
+	python3 scripts/fetch-fonts.py --clean
+
 dir:
 	@if [ ! -d $(cf_source_dir) ]; then \
 		make setup; \
@@ -124,8 +139,14 @@ checkpoint:
 	cd $(cf_source_dir) && git commit -m "Checkpoint" -uno
 
 clean:
-	cd $(cf_source_dir) && git clean -fdx && ./mach clobber
-	make revert
+	@if [ -e "$(cf_source_dir)/.git" ]; then \
+		cd "$(cf_source_dir)" && ./mach clobber && git clean -fdx; \
+		$(MAKE) revert; \
+	else \
+		echo "No git repo found in $(cf_source_dir); re-extracting Firefox source..."; \
+		rm -rf "$(cf_source_dir)"; \
+		$(MAKE) setup-minimal; \
+	fi
 
 distclean:
 	rm -rf $(cf_source_dir) $(ff_source_tarball)
@@ -136,23 +157,10 @@ build: unbusy
 	fi
 	cd $(cf_source_dir) && ./mach build $(_ARGS)
 
-edits:
-	python3 ./scripts/developer.py $(version) $(release)
-
-check-arch:
-	@if ! echo "x86_64 i686 arm64" | grep -qw "$(arch)"; then \
-		echo "Error: Invalid arch value. Must be x86_64, i686, or arm64."; \
-		exit 1; \
-	fi
-
-build-launcher: check-arch
-	cd legacy/launcher && bash build.sh $(arch) $(os)
-
-package-linux:
+package-linux: fonts-extract
 	python3 scripts/package.py linux \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
 			bundle/fontconfig \
 		--version $(version) \
@@ -160,41 +168,26 @@ package-linux:
 		--arch $(arch) \
 		--fonts windows macos linux
 
-package-macos:
+package-macos: fonts-extract
 	python3 scripts/package.py macos \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
 		--version $(version) \
 		--release $(release) \
 		--arch $(arch) \
-		--fonts windows linux
+		--fonts windows macos linux
 
-package-windows:
+package-windows: fonts-extract
 	python3 scripts/package.py windows \
 		--includes \
 			settings/chrome.css \
-			settings/camoucfg.jvv \
 			settings/properties.json \
-			~/.mozbuild/vs/VC/Redist/MSVC/14.38.33135/$(vcredist_arch)/Microsoft.VC143.CRT/*.dll \
+			~/.mozbuild/vs/VC/Redist/MSVC/*/$(vcredist_arch)/Microsoft.VC*.CRT/*.dll \
 		--version $(version) \
 		--release $(release) \
 		--arch $(arch) \
-		--fonts macos linux
-
-run-launcher:
-	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	make build-launcher arch=x86_64 os=linux;
-	cp legacy/launcher/dist/launch $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch
-
-run-pw:
-	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch;
-	make build-launcher arch=x86_64 os=linux;
-	python3 scripts/run-pw.py \
-		--version $(version) \
-		--release $(release)
+		--fonts windows macos linux
 
 run:
 	cd $(cf_source_dir) \
@@ -237,16 +230,28 @@ workspace:
 	make first-checkpoint || true
 	make patch $(_ARGS)
 
+# The Playwright suite: upstream playwright-python at the tag ci/versions.py
+# resolves for this browser, fetched fresh, plus tests/camoufox/. The first run
+# builds a virtualenv under .ci-work/ and is slow; later runs reuse it.
 tests:
-	cd ./tests && \
-	bash run-tests.sh \
-		--executable-path ../$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin \
+	python3 -m ci.run_playwright \
+		--binary ./$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin \
 		$(if $(filter true,$(headful)),--headful,)
+
+# Lets tests/patches/*.py run against an unpackaged build. Not needed by `run`
+# or `tests`, which launch without the Python wrapper and so fall back to the
+# system fontconfig.
+#
+# Depends on fonts-extract because the bundle is a release asset: a fresh
+# checkout has no bundle/fonts/ to stage from. That is a no-op once the tree is
+# unpacked (fetch-fonts.py stamps it with the archive's sha256), so this stays
+# cheap enough to run before every launch.
+stage-fonts: fonts-extract
+	bash scripts/stage-fonts.sh $(version) $(release)
 
 unbusy:
 	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin \
-		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox \
-		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/launch
+		$(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox
 
 path:
 	@realpath $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin
