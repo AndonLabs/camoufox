@@ -2,6 +2,11 @@ name: Build Andon Linux browser
 
 on:
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: Compile Firefox even when a compatible artifact exists
+        type: boolean
+        default: false
   push:
     branches: [upgrade/firefox-156]
     tags: ["v*-beta.*.*"]
@@ -10,7 +15,35 @@ permissions:
   contents: read
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact_id }}
+      run_id: ${{ steps.artifact.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install CI dependencies
+        run: python3 -m pip install 'PyYAML>=6.0' 'pytest>=8.0'
+      - name: Verify artifact selection
+        run: python3 -m pytest ci/tests/test_reuse_build.py -q
+      - name: Find compatible browser
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: python3 -m ci.reuse_build
+
   build:
+    needs: resolve
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest-16-cores
     env:
       BUILD_TARGET: linux,x86_64
@@ -21,6 +54,7 @@ jobs:
 
     steps:
       - name: Maximize build space
+        if: needs.resolve.outputs.artifact_id == ''
         uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef # v4.1
         with:
           remove-dotnet: "true"
@@ -33,6 +67,7 @@ jobs:
           verbose: "false"
 
       - name: Remove unwanted tools
+        if: needs.resolve.outputs.artifact_id == ''
         # Originally from here: https://github.com/AdityaGarg8/remove-unwanted-software/blob/master/action.yml
         run: |
           sudo apt-get remove -y '^aspnetcore-.*' > /dev/null
@@ -59,6 +94,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up LLVM
+        if: needs.resolve.outputs.artifact_id == ''
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
@@ -70,12 +106,14 @@ jobs:
           sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
 
       - name: Show build resources
+        if: needs.resolve.outputs.artifact_id == ''
         run: |
           nproc
           free -h
           df -h
 
       - name: Install dependencies
+        if: needs.resolve.outputs.artifact_id == ''
         run: |
           sudo apt-get update
           # ccache: the mozconfig enables --with-ccache, but the runner image no
@@ -93,14 +131,17 @@ jobs:
           node --test tests/patches/mouse-coordinate-rounding.test.cjs
 
       - name: Fetch and verify the font bundle
+        if: needs.resolve.outputs.artifact_id == ''
         run: |
           make fonts-extract
           python3 scripts/verify-fonts.py
 
       - name: Prepare the source tree
+        if: needs.resolve.outputs.artifact_id == ''
         run: python3 -m ci.run_prepare
 
       - name: Create swap space
+        if: needs.resolve.outputs.artifact_id == ''
         run: |
           sudo fallocate -l 24G /swapfile
           sudo chmod 600 /swapfile
@@ -110,10 +151,23 @@ jobs:
           df -h /
 
       - name: Build
+        id: compile
+        if: needs.resolve.outputs.artifact_id == ''
         env:
           # Leave memory headroom for concurrent C++ compilation and linking.
           CARGO_BUILD_JOBS: "8"
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
+
+      - name: Download compatible browser
+        id: download
+        if: needs.resolve.outputs.artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.resolve.outputs.artifact_id }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
 
       - name: Verify mouse input on the packaged browser
         if: matrix.target == 'linux' && matrix.arch == 'x86_64'
@@ -128,7 +182,7 @@ jobs:
             "$RUNNER_TEMP/input-regression/camoufox-bin"
 
       - name: Upload artifacts
-        if: always()
+        if: always() && (steps.compile.outcome == 'success' || steps.download.outcome == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: CamoufoxBuilds-${{ matrix.target }}-${{ matrix.arch }}

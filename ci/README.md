@@ -1,5 +1,11 @@
 # The test pipeline
 
+The Andon Linux packaging workflow (`.github/workflows/build.yml`) first runs
+`ci/reuse_build.py`: it compares browser inputs and the build recipe with retained
+same-repository push/dispatch artifacts. An unchanged browser is downloaded and
+tested again without compiling. See the [Andon build notes](../README.md#andon-linux-build)
+for the rebuild override and release behavior.
+
 Everything that runs a suite against Camoufox. Driven identically from a pull
 request, a push to main, and — through `workflow_call` — any caller that needs
 to test a specific browser version, so there is one definition of "the tests
