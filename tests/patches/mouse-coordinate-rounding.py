@@ -19,10 +19,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from playwright.async_api import Page, Playwright, async_playwright
-
 from helpers import resolve_binary
-
+from playwright.async_api import Page, Playwright, async_playwright
 
 WIDTH = 960
 HEIGHT = 640
@@ -60,6 +58,9 @@ async def exercise(page: Page, scale: float) -> None:
         "Fingerprint DPR was not applied"
     )
     button = page.get_by_role("button")
+    # The tracked cursor starts at (0, 0), and a move to that same pixel is a
+    # deliberate no-op. Start inside the page so the first edge move is real.
+    await asyncio.wait_for(page.mouse.move(WIDTH / 2, HEIGHT / 2), TIMEOUT_SECONDS)
     for count, (x, y) in enumerate(POINTS, 1):
         await page.evaluate("window.lastMove = null")
         await asyncio.wait_for(page.mouse.move(x, y), TIMEOUT_SECONDS)
