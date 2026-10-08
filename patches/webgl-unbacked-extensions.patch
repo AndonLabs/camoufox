@@ -1,0 +1,13 @@
+--- a/dom/canvas/ClientWebGLContext.cpp
++++ b/dom/canvas/ClientWebGLContext.cpp
+@@ -6444,7 +6444,9 @@
+   switch (mode) {
+     case webgl::ProvokingVertex::FirstVertex:
+     case webgl::ProvokingVertex::LastVertex: {
+-      Run<RPROC(ProvokingVertex)>(mode);
++      if (Limits().supportedExtensions[WebGLExtensionID::WEBGL_provoking_vertex]) {
++        Run<RPROC(ProvokingVertex)>(mode);
++      }
+       funcScope.mKeepNotLostOrNull->state.mProvokingVertex = mode;
+       return;
+     }
