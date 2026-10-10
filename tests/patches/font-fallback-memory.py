@@ -38,13 +38,14 @@ FONTS = ["Helvetica", "Arial", "Apple Color Emoji", "System Font", ".SF NS", "Sy
 def named_instances(environment: dict[str, str]) -> int:
     result = subprocess.run(
         ["fc-list", ":family=System Font", "--format",
-         "%{file}\t%{index}\t%{namedinstance}\n"],
+         "%{file}\t%{index}\n"],
         env=environment, capture_output=True, text=True, check=True, timeout=20,
     )
+    # Older fontconfig versions expose named instances only through face indices.
     instances = {
         (file, index)
-        for file, index, named in (row.split("\t") for row in result.stdout.splitlines())
-        if named == "True"
+        for file, index in (row.split("\t") for row in result.stdout.splitlines())
+        if int(index) >> 16 > 0
     }
     if len(instances) < 300:
         raise AssertionError(
@@ -74,7 +75,7 @@ async def exercise(binary: str, connection: Connection) -> None:
         )
         await page.screenshot()
         connection.send({"phase": "ready", "named_instances": count})
-        if connection.recv() != "continue":
+        if await asyncio.to_thread(connection.recv) != "continue":
             raise AssertionError("supervisor did not establish a memory baseline")
 
         await page.evaluate("""() => {
@@ -84,7 +85,7 @@ async def exercise(binary: str, connection: Connection) -> None:
         }""")
         await page.screenshot(timeout=PROBE_SECONDS * 1000)
         connection.send({"phase": "rendered"})
-        if connection.recv() != "check":
+        if await asyncio.to_thread(connection.recv) != "check":
             raise AssertionError("supervisor did not complete the memory observation")
         await page.screenshot(timeout=PROBE_SECONDS * 1000)
         result = await page.evaluate("""() => {
