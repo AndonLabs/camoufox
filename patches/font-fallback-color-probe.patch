@@ -1,0 +1,151 @@
+diff --git a/gfx/thebes/SharedFontList.cpp b/gfx/thebes/SharedFontList.cpp
+--- a/gfx/thebes/SharedFontList.cpp
++++ b/gfx/thebes/SharedFontList.cpp
+@@ -556,6 +556,14 @@
+           continue;
+         }
+         if (aMatchData->mPresentation != FontPresentation::Any) {
++          // Do not allocate a platform font just to reject a known monochrome
++          // loser. Potential winners still take the normal validation path.
++          if (PrefersColor(aMatchData->mPresentation) &&
++              distance + kPresentationMismatch >= aMatchData->mMatchDistance &&
++              !fe->MayHaveColorGlyphFor(aMatchData->mCh,
++                                       aMatchData->mNextCh)) {
++            continue;
++          }
+           RefPtr<gfxFont> font = fe->FindOrMakeFont(&aMatchData->mStyle);
+           if (!font) {
+             continue;
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -27,6 +27,7 @@
+ #include "nsPresContext.h"
+ #include "nsString.h"
+ #include "nsStringFwd.h"
++#include "nsUnicodeProperties.h"
+ #include "nsXULAppAPI.h"
+ #define StandardFonts
+ #include "StandardFonts-linux.inc"
+@@ -668,6 +669,74 @@
+   return gfxFT2FontEntryBase::FaceHasTable(GetFTFace(), aTableTag);
+ }
+ 
++bool gfxFontconfigFontEntry::MayHaveColorGlyphFor(uint32_t aCh,
++                                                uint32_t aNextCh) {
++  if (IsUserFont()) {
++    return true;
++  }
++
++  // Enumerate raw directory tags: an unreadable or malformed color table must
++  // not be mistaken for a font that cannot provide color.
++  auto face = GetHBFace();
++  unsigned int total = hb_face_get_table_tags(face, 0, nullptr, nullptr);
++  if (!total) {
++    return true;
++  }
++  unsigned int cmapCount = 0;
++  for (unsigned int offset = 0; offset < total;) {
++    hb_tag_t tags[16];
++    unsigned int count = std::min(16u, total - offset);
++    unsigned int expected = count;
++    if (hb_face_get_table_tags(face, offset, &count, tags) != total ||
++        count != expected) {
++      return true;
++    }
++    for (unsigned int i = 0; i < count; ++i) {
++      switch (tags[i]) {
++        case TRUETYPE_TAG('C', 'B', 'D', 'T'):
++        case TRUETYPE_TAG('s', 'b', 'i', 'x'):
++        case TRUETYPE_TAG('C', 'O', 'L', 'R'):
++        case TRUETYPE_TAG('S', 'V', 'G', ' '):
++          return true;
++        case TRUETYPE_TAG('c', 'm', 'a', 'p'):
++          ++cmapCount;
++          break;
++      }
++    }
++    offset += count;
++  }
++  if (aNextCh != unicode::kVariationSelector16) {
++    return false;
++  }
++  if (cmapCount != 1 || gfxFontUtils::GetUVSFallback(aCh, aNextCh)) {
++    return true;
++  }
++
++  // Both default and non-default UVS mappings can imply emoji presentation.
++  // Shared charmaps do not carry mUVSOffset, so inspect every raw subtable.
++  AutoTable cmap(this, TRUETYPE_TAG('c', 'm', 'a', 'p'));
++  if (!cmap) {
++    return true;
++  }
++  unsigned int length;
++  const auto* data =
++      reinterpret_cast<const uint8_t*>(hb_blob_get_data(cmap, &length));
++  if (length < 4 || gfxFontUtils::ReadShortAt(data, 0) != 0) {
++    return true;
++  }
++  uint16_t count = gfxFontUtils::ReadShortAt(data, 2);
++  if (!count || count > (length - 4) / 8) {
++    return true;
++  }
++  for (uint16_t i = 0; i < count; ++i) {
++    uint32_t offset = gfxFontUtils::ReadLongAt(data, 4 + uint32_t(i) * 8 + 4);
++    if (offset > length - 2 || gfxFontUtils::ReadShortAt(data, offset) == 14) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ hb_blob_t* gfxFontconfigFontEntry::GetFontTableInternal(uint32_t aTableTag) {
+   // for data fonts, read directly from the font data
+   if (FTUserFontData* ufd = GetUserFontData()) {
+diff --git a/gfx/thebes/gfxFontEntry.cpp b/gfx/thebes/gfxFontEntry.cpp
+--- a/gfx/thebes/gfxFontEntry.cpp
++++ b/gfx/thebes/gfxFontEntry.cpp
+@@ -1828,6 +1828,15 @@
+     if (fe && fe->HasCharacter(aMatchData->mCh)) {
+       float distance = WeightStyleWidthDistance(fe, aMatchData->mStyle);
+       if (aMatchData->mPresentation != FontPresentation::Any) {
++        float mismatchedDistance = distance + kPresentationMismatch;
++        if (PrefersColor(aMatchData->mPresentation) &&
++            (mismatchedDistance > aMatchData->mMatchDistance ||
++             (mismatchedDistance == aMatchData->mMatchDistance &&
++              aMatchData->mBestMatch &&
++              Compare(fe->Name(), aMatchData->mBestMatch->Name()) <= 0)) &&
++            !fe->MayHaveColorGlyphFor(aMatchData->mCh, aMatchData->mNextCh)) {
++          continue;
++        }
+         RefPtr<gfxFont> font = fe->FindOrMakeFont(&aMatchData->mStyle);
+         if (!font) {
+           continue;
+diff --git a/gfx/thebes/gfxFcPlatformFontList.h b/gfx/thebes/gfxFcPlatformFontList.h
+--- a/gfx/thebes/gfxFcPlatformFontList.h
++++ b/gfx/thebes/gfxFcPlatformFontList.h
+@@ -97,6 +97,8 @@
+ 
+   mozilla::gfx::SharedFTFace* GetFTFace();
+   FTUserFontData* GetUserFontData() override;
++
++  bool MayHaveColorGlyphFor(uint32_t aCh, uint32_t aNextCh) override;
+ 
+   FT_MM_Var* GetMMVar() override;
+ 
+diff --git a/gfx/thebes/gfxFontEntry.h b/gfx/thebes/gfxFontEntry.h
+--- a/gfx/thebes/gfxFontEntry.h
++++ b/gfx/thebes/gfxFontEntry.h
+@@ -365,6 +365,12 @@
+ 
+   bool TryGetColorGlyphs();
+ 
++  // False is a proof of monochrome presentation; true leaves glyph selection
++  // to the platform font and shaper.
++  virtual bool MayHaveColorGlyphFor(uint32_t aCh, uint32_t aNextCh) {
++    return true;
++  }
++
+   bool HasColorBitmapTable() {
+     LazyFlag flag = mHasColorBitmapTable;
+     if (flag == LazyFlag::Uninitialized) {

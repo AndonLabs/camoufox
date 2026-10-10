@@ -739,6 +739,20 @@ python3 -m ci.release            paired                  # the release built fro
 python3 -m ci.release            lib-plan --channel prerelease
 ```
 
+The parity guard `font-fallback-memory` requires Linux and the complete staged
+macOS font bundle. It adds an emoji variation selector to text in the bundled
+Helvetica with System Font and its aliases available for fallback, then requires
+layout and screenshots within 15 seconds and 256 MiB of additional anonymous
+process-tree memory. It observes memory for 10 seconds
+before the final read, including work that continues after an initial paint.
+Its independent supervisor kills only its own worker and browser descendants
+on failure. The guard checks that
+hundreds of named font instances remain available; filtering them cannot satisfy
+the regression. Add-on downloads are disabled and the page makes no network
+requests. It checks resource use and responsiveness, not rendering parity or
+third-party detection scores.
+The Linux build workflow also runs this guard against the packaged artifact.
+
 Each suite runner writes one result file to `.ci-work/results/` (`run_prepare`
 writes none). `ci/summarize.py` folds the shards, decides, and renders the table. A required suite that produced no result
 file is a **failure**, never a skip — otherwise deleting a job would be the
