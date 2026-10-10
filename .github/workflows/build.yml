@@ -181,6 +181,14 @@ jobs:
             python3 tests/patches/mouse-coordinate-rounding.py \
             "$RUNNER_TEMP/input-regression/camoufox-bin"
 
+      - name: Verify emoji fallback on the packaged browser
+        if: matrix.target == 'linux' && matrix.arch == 'x86_64'
+        run: |
+          python3 -m pip install -e pythonlib psutil playwright==1.57.0
+          python3 scripts/pin-fpgen-model.py
+          CAMOUFOX_EXECUTABLE_PATH="$RUNNER_TEMP/input-regression/camoufox-bin" \
+            python3 tests/patches/font-fallback-memory.py
+
       - name: Upload artifacts
         if: always() && (steps.compile.outcome == 'success' || steps.download.outcome == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

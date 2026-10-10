@@ -234,6 +234,33 @@ alias block above. macOS: Helvetica / Times / Menlo / Apple Chancery / Zapfino.
 `<dir prefix="cwd">fonts</dir>` line that `utils.py` rewrites is kept in all
 three — `verify-fonts.py` fails if it is missing.
 
+## Font fallback must not allocate unused faces
+
+On Linux, `gfxFontconfigFontEntry::GetUserFontData` must not instantiate an
+installed FreeType face just to discover that it has no in-memory font data.
+Downloaded fonts already have their face and attached data at construction;
+installed fonts can read their tables directly through HarfBuzz. Creating a
+separate variable-font face for every named instance during a character-map
+scan can otherwise consume hundreds of MiB for one emoji fallback.
+
+Color fallback also creates platform fonts to inspect glyph presentation. On
+Linux, candidates that provably cannot win are rejected before that allocation:
+their metadata must rule out color glyphs, and their style distance plus the
+presentation penalty must lose under the existing tie rules. Potential winners
+still use the original font creation and validation path.
+
+The metadata check is conservative. Color tables, user fonts, and uncertain
+table directories retain the original path. For a VS16 probe, so do any format14
+cmap and unreadable or inconsistent cmap metadata. The check reads the raw cmap
+because a shared character map does not establish whether a font supports
+variation selectors. Other host platforms retain their existing behavior.
+
+Keep the complete font bundle and every named instance. The allocation guard
+does not change family visibility, matching order, variation coordinates, or
+the face creation used for rendering. A rendering change requires separate
+evidence; reducing the available faces is not equivalent to fixing metadata
+allocation.
+
 ## Verifying
 
 ```
@@ -248,6 +275,32 @@ resolve to a reportable family, essential / variant / marker ⊆ `fonts.json`,
 20 draws stay inside `fonts.json`, each face stored exactly once, no subfolders,
 and no basename collisions within a package's group set.
 
+The browser regression runs on Linux against a built or packaged binary with
+the complete staged font bundle:
+
+```
+make stage-fonts
+python3 -m ci.run_patch_guards --binary path/to/camoufox-bin --group parity --only font-fallback-memory
+```
+
+It checks that `System Font` still exposes at least 300 named instances, then
+lays out `⚠️` with `Helvetica,Arial,sans-serif` using the default fallback
+preferences. The six-name font list includes `System Font`, `.SF NS`, and
+`Systemschrift`; these aliases expose the problematic fallback path. Add-on
+downloads are disabled and the page makes no network requests. An independent
+supervisor allows 15 seconds for the probe and observes anonymous memory for
+at least 10 seconds, even if the first screenshot returns sooner.
+Growth above 256 MiB after a plain-text warmup fails the guard and terminates
+only the guard's process tree. This catches asynchronous font-loading growth
+as well as a blocked page. It reads `RssAnon`, or sums `Anonymous` in `smaps`
+on kernels such as gVisor that do not expose the aggregate counter.
+
+This is a resource regression, not a pixel or fingerprint parity check. For a
+font-engine change, compare the same binary configuration and font bundle
+before and after: family and local-name resolution, named weights, text
+metrics, and rendered pixels. Include a downloaded font to exercise the
+in-memory table path alongside installed fonts.
+
 ## Known residue
 
 - **The Linux base over-claims against the recorded corpus.** A draw reports a
@@ -259,7 +312,7 @@ and no basename collisions within a package's group set.
   version-share data source behind them, unlike the addition probabilities,
   which are measured. Sonoma's base is inherited and not re-verifiable on
   current hardware.
-- **Nothing has been checked in a running browser.** Both invariants above are
-  verified at the fontconfig layer, which is the gate on Linux packages. On
-  macOS and Windows hosts the gate is the allowlist patch instead, and that has
-  not been exercised against the flattened group layout.
+- **The full distribution is verified at the fontconfig layer.** The focused
+  browser guard covers one Linux fallback case. On macOS and Windows hosts the
+  gate is the allowlist patch instead, and that has not been exercised against
+  the flattened group layout.
