@@ -66,6 +66,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     ),
     "parity": (
         "contentaccessible-parity",
+        "font-fallback-memory",
         "gfx-probes-packaged",
         "hardware-acceleration-policy",
         "popup-blocker-parity",

@@ -1,0 +1,15 @@
+diff --git a/gfx/thebes/gfxFcPlatformFontList.cpp b/gfx/thebes/gfxFcPlatformFontList.cpp
+--- a/gfx/thebes/gfxFcPlatformFontList.cpp
++++ b/gfx/thebes/gfxFcPlatformFontList.cpp
+@@ -1156,6 +1156,11 @@
+ }
+ 
+ FTUserFontData* gfxFontconfigFontEntry::GetUserFontData() {
++  // Data-font faces are initialized at construction. Loading an installed face
++  // here would allocate it only to discover that it has no attached user data.
++  if (!mFTFaceInitialized) {
++    return nullptr;
++  }
+   auto* face = GetFTFace();
+   if (face && face->GetData()) {
+     return static_cast<FTUserFontData*>(face->GetData());
