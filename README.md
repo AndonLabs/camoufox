@@ -24,21 +24,24 @@
 ## Andon Linux build
 
 This fork builds Linux x86_64 from upstream `v156.0.1-beta.34`, with fork
-release `v156.0.1-beta.34.1`. It keeps RLBox's Segue optimization disabled for
+release `v156.0.1-beta.34.3`. It keeps RLBox's Segue optimization disabled for
 gVisor compatibility and converts mouse boundaries through the real widget's
-device-pixel transform. See [input dispatch](docs/input-dispatch.md).
+device-pixel transform. It also fixes unsupported WebGL provoking-vertex calls
+and avoids unnecessary font allocations during emoji fallback. See
+[input dispatch](docs/input-dispatch.md).
 
 [Build Andon Linux browser](.github/workflows/build.yml) builds an artifact on
-`upgrade/firefox-156` pushes or manual dispatch. A matching version-tag push
-creates a draft GitHub release after the packaged mouse regression passes.
+`main` and `upgrade/firefox-156` pushes or manual dispatch. A matching version-tag
+push creates a draft GitHub release after the packaged mouse and font fallback
+regressions pass.
 Before compiling, CI looks for a retained Linux artifact with identical browser
 inputs and build commands. Test-only and documentation changes reuse that ZIP,
-skip source/toolchain setup, and run the current packaged regression. A previous
+skip source/toolchain setup, and run the current packaged regressions. A previous
 test failure is eligible only if its compile and packaging succeeded. Changed
 patches, resources, fonts, version, build scripts, or build commands require a
 new build. Manual dispatch has a `force_build` option. The selected source run
 and commit are recorded in the Actions summary. Version tags can reuse the same
-artifact too; the current regression must pass before a draft release is created.
+artifact too; the current regressions must pass before a draft release is created.
 The upstream PyPI/npm release workflow is disabled in this fork.
 
 The build targets `ubuntu-latest-16-cores`, the organization's 16-core Ubuntu
