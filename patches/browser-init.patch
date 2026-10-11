@@ -1,10 +1,10 @@
 diff --git a/browser/base/content/browser-init.js b/browser/base/content/browser-init.js
-index 1cfa4b8497..bdf8d7202e 100644
+index 0aa4baea8e..343691b2f8 100644
 --- a/browser/base/content/browser-init.js
 +++ b/browser/base/content/browser-init.js
-@@ -3,6 +3,16 @@
-  * License, v. 2.0. If a copy of the MPL was not distributed with this
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+@@ -44,6 +44,17 @@ var gSerialDeviceObserver = {
+   },
+ };
  
 +const { AddonManager } = ChromeUtils.importESModule(
 +  "resource://gre/modules/AddonManager.sys.mjs",
@@ -15,11 +15,12 @@ index 1cfa4b8497..bdf8d7202e 100644
 +  { global: "contextual" }
 +);
 +
++const ADDONS_INSTALLED_PREF = "camoufox.addons.installed";
 +
  let _resolveDelayedStartup;
  var delayedStartupPromise = new Promise(resolve => {
    _resolveDelayedStartup = resolve;
-@@ -72,7 +82,7 @@ var gBrowserInit = {
+@@ -157,7 +168,7 @@ var gBrowserInit = {
      updateBookmarkToolbarVisibility();
  
      // Set a sane starting width/height for all resolutions on new profiles.
@@ -28,7 +29,7 @@ index 1cfa4b8497..bdf8d7202e 100644
        // When the fingerprinting resistance is enabled, making sure that we don't
        // have a maximum window to interfere with generating rounded window dimensions.
        document.documentElement.setAttribute("sizemode", "normal");
-@@ -310,6 +320,22 @@ var gBrowserInit = {
+@@ -385,6 +396,22 @@ var gBrowserInit = {
      // Update UI if browser is under remote control.
      gRemoteControl.updateVisualCue();
  
@@ -51,11 +52,13 @@ index 1cfa4b8497..bdf8d7202e 100644
      // If we are given a tab to swap in, take care of it before first paint to
      // avoid an about:blank flash.
      let tabToAdopt = this.getTabToAdopt();
-@@ -345,6 +371,31 @@ var gBrowserInit = {
+@@ -448,6 +475,33 @@ var gBrowserInit = {
        }
      }
  
-+    if (ChromeUtils.camouGetBool("showcursor", true)) {
++    // Camoufox: debugging aid only -- a red dot following the mouse is a visible
++    // automation cue no real Firefox draws. Opt in with config showcursor=true.
++    if (ChromeUtils.camouGetBool("showcursor", false)) {
 +      let cursorFollower = document.createElement("div");
 +      cursorFollower.id = "cursor-highlighter";
 +      cursorFollower.style.cssText = `
@@ -83,8 +86,8 @@ index 1cfa4b8497..bdf8d7202e 100644
      // Wait until chrome is painted before executing code not critical to making the window visible
      this._boundDelayedStartup = this._delayedStartup.bind(this);
      window.addEventListener("MozAfterPaint", this._boundDelayedStartup);
-@@ -366,9 +417,156 @@ var gBrowserInit = {
-       )?.removeAttribute("key");
+@@ -475,9 +529,181 @@ var gBrowserInit = {
+       }
      }
  
 +    // Set default size
@@ -92,10 +95,11 @@ index 1cfa4b8497..bdf8d7202e 100644
 +
 +    // Hijack the outer window size.
 +    //
-+    // window.outerWidth/outerHeight are already spoofed unconditionally in C++
-+    // (nsGlobalWindowInner::GetOuterWidth/GetOuterHeight consult MaskConfig, see
-+    // fingerprint-injection.patch), so the chrome window only has to be *resized*
-+    // here -- it must not be pinned. Pinning documentElement to the spoofed size
++    // window.outerWidth/outerHeight report the REAL window (they are not read
++    // from MaskConfig; see nsGlobalWindowInner::GetOuterWidth in
++    // fingerprint-injection.patch), so resizing the real window here is what
++    // makes them match the drawn identity. It must not be pinned: pinning
++    // documentElement to the spoofed size
 +    // caps .browserStack, which caps the content viewport, which makes Juggler's
 +    // awaitViewportDimensions handshake unsatisfiable for any larger viewport.
 +    // That await has no timeout, so it hangs forever (daijro/camoufox#666).
@@ -106,11 +110,31 @@ index 1cfa4b8497..bdf8d7202e 100644
 +    if ((outerHeight = ChromeUtils.camouGetInt("window.outerHeight"))) {
 +      window.resizeTo(window.outerWidth, outerHeight);
 +    }
++    // The window manager can override that size when it maps the window: GNOME
++    // mutter auto-maximizes a new window covering >= 80% of the work area
++    // (org.gnome.mutter auto-maximize). The page would then get the host's
++    // work area instead of the drawn window, which can exceed the drawn
++    // screen.width. Undo a maximize that lands during startup and re-assert
++    // the drawn size; after the deadline a maximize is the user's own.
++    if (outerWidth || outerHeight) {
++      const deadline = Date.now() + 5000;
++      const undoStartupMaximize = () => {
++        if (Date.now() > deadline) {
++          window.removeEventListener("sizemodechange", undoStartupMaximize);
++          return;
++        }
++        if (window.windowState === window.STATE_MAXIMIZED) {
++          window.restore();
++          window.resizeTo(outerWidth || window.outerWidth, outerHeight || window.outerHeight);
++        }
++      };
++      window.addEventListener("sizemodechange", undoStartupMaximize);
++    }
 +    browser.style.setProperty('box-sizing', 'content-box');
 +
 +    // Hijack the inner window size
-+    let innerWidth = ChromeUtils.camouGetInt("window.innerWidth") || ChromeUtils.camouGetInt("document.body.clientWidth");
-+    let innerHeight = ChromeUtils.camouGetInt("window.innerHeight") || ChromeUtils.camouGetInt("document.body.clientHeight");
++    let innerWidth = ChromeUtils.camouGetInt("window.innerWidth");
++    let innerHeight = ChromeUtils.camouGetInt("window.innerHeight");
 +
 +    if (innerWidth || innerHeight) {
 +      let win_inner_style = document.createElement('style');
@@ -133,9 +157,13 @@ index 1cfa4b8497..bdf8d7202e 100644
 +      window.resizeBy(width - innerWidth, height + toolbarTop - innerHeight);
 +    }
 +
-+    // Install addons if specified
++    // Install addons once per launch: this runs for every window, Juggler opens
++    // one per page, and reinstalling a temporary addon restarts it. A default
++    // pref is never written to prefs.js.
 +    let addonPaths = ChromeUtils.camouGetStringList("addons");
-+    if (addonPaths?.length) {
++    let defaults = Services.prefs.getDefaultBranch("");
++    if (addonPaths?.length && !defaults.getBoolPref(ADDONS_INSTALLED_PREF, false)) {
++      defaults.setBoolPref(ADDONS_INSTALLED_PREF, true);
 +      Promise.all(addonPaths.map(path => this.installTemporaryAddon(path)))
 +        .then(addons => ChromeUtils.camouDebug("Installed " + addons.length + " addon(s)"))
 +        .catch(e => ChromeUtils.camouDebug("Failed to install addons: " + e));

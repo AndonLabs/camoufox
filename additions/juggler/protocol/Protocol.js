@@ -77,6 +77,8 @@ pageTypes.Size = {
 pageTypes.Viewport = {
   viewportSize: pageTypes.Size,
   deviceScaleFactor: t.Optional(t.Number),
+  screenSize: t.Optional(pageTypes.Size),
+  isMobile: t.Optional(t.Boolean),
 };
 
 pageTypes.DOMQuad = {
@@ -762,17 +764,26 @@ const Page = {
       wsid: t.String,
       opcode: t.Number,
       data: t.String,
+      timestamp: t.Number,
     },
     'webSocketFrameReceived': {
       frameId: t.String,
       wsid: t.String,
       opcode: t.Number,
       data: t.String,
+      timestamp: t.Number,
     },
     'screencastFrame': {
       data: t.String,
       deviceWidth: t.Number,
       deviceHeight: t.Number,
+      // Seconds. Playwright's Firefox delegate does `event.timestamp * 1e3` with
+      // no fallback (unlike its WebKit path, which defaults to Date.now()), and
+      // feeds the result to VideoRecorder.writeFrame() as the frame's wall time.
+      // Omitting this made every frame NaN-timestamped, so the recorder wrote
+      // nothing to ffmpeg's stdin and ffmpeg died with "Error opening output
+      // file" -- record_video_dir produced no file at all.
+      timestamp: t.Number,
     },
   },
 
@@ -799,6 +810,9 @@ const Page = {
     'setViewportSize': {
       params: {
         viewportSize: t.Nullable(pageTypes.Size),
+        deviceScaleFactor: t.Optional(t.Number),
+        screenSize: t.Optional(pageTypes.Size),
+        isMobile: t.Optional(t.Boolean),
       },
     },
     'setZoom': {
@@ -888,7 +902,7 @@ const Page = {
     },
     'screenshot': {
       params: {
-        mimeType: t.Enum(['image/png', 'image/jpeg']),
+        mimeType: t.Enum(['image/png', 'image/jpeg', 'image/webp']),
         clip: pageTypes.Clip,
         quality: t.Optional(t.Number),
         omitDeviceScaleFactor: t.Optional(t.Boolean),
@@ -994,7 +1008,14 @@ const Page = {
     },
     'screencastFrameAck': {
       params: {
-        screencastId: t.String,
+        // Optional: Playwright's Firefox delegate acks with no parameters at
+        // all (`sendMayFail("Page.screencastFrameAck")`). Requiring the id made
+        // the dispatcher reject every ack, and because it is sent via
+        // sendMayFail the client never noticed. nsScreencastService allows
+        // kMaxFramesInFlight = 1, so an unacked frame stalls the capture
+        // permanently: exactly one frame is emitted and record_video_dir
+        // produces an empty or missing .webm.
+        screencastId: t.Optional(t.String),
       },
     },
     'stopScreencast': {

@@ -1,7 +1,4 @@
-import json as _json
-import urllib.request
-from typing import Any, Dict, List, Optional, Union, overload
-from urllib.parse import urlparse
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.sync_api import (
     Browser,
@@ -14,9 +11,13 @@ from typing_extensions import Literal
 from camoufox.virtdisplay import VirtualDisplay
 
 from .fingerprints import generate_context_fingerprint
+from .ip import Proxy, proxy_exit_geo
 from .utils import (
     attach_no_viewport_default,
+    attach_desktop_only_warning,
+    attach_stock_media_defaults,
     launch_options,
+    STOCK_MEDIA_DEFAULTS,
     spoofs_window_dimensions,
     sync_attach_vd,
 )
@@ -107,47 +108,57 @@ def NewBrowser(
         virtual_display = None
 
     if not from_options:
+        # Opt-in (2026-09-17). Pinning keeps the identity's core count by
+        # constraining the browser to that many cores; it costs real CPU, needs
+        # a launch lock, and does nothing on macOS. What it defends against is a
+        # page timing N parallel workers, which is expensive and noisy on a busy
+        # machine. Off, the host's own snapped count is reported, so reported
+        # and measurable still agree -- the identity just loses that one draw.
+        kwargs.setdefault('pin_cpu_cores', False)
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed
     # to a different size (daijro/camoufox#666), so default to no_viewport.
     no_viewport_default = spoofs_window_dimensions(from_options)
 
-    # Persistent context
-    if persistent_context:
-        if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
-            from_options = {**from_options, 'no_viewport': True}
-        context = playwright.firefox.launch_persistent_context(**from_options)
-        return sync_attach_vd(context, virtual_display)
+    # Pin the driver (and so the browser it is about to spawn) to as many
+    # cores as the identity reports, so measurable parallelism matches
+    # navigator.hardwareConcurrency; the driver gets its cores back afterwards.
+    from . import cpu_affinity
+    from .utils import driver_pid, pinned_core_count
 
-    # Browser
-    browser = playwright.firefox.launch(**from_options)
-    if no_viewport_default:
-        attach_no_viewport_default(browser)
-    return sync_attach_vd(browser, virtual_display)
-
-
-def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:
-    """Builds a proxy URL string with embedded credentials."""
-    parsed = urlparse(proxy.get("server", ""))
-    user = proxy.get("username", "")
-    pwd = proxy.get("password", "")
-    if user and pwd:
-        return f"{parsed.scheme}://{user}:{pwd}@{parsed.netloc}"
-    return proxy.get("server", "")
-
-
-def _resolve_proxy_geo(proxy: Dict[str, str]) -> Dict[str, Optional[str]]:
-    """Queries ip-api.com through the proxy for the exit IP and timezone."""
-    proxy_url = _proxy_url_with_creds(proxy)
-    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-    opener = urllib.request.build_opener(handler)
+    pin_to = pinned_core_count(from_options)
+    pid = driver_pid(playwright) if pin_to else None
+    previous = cpu_affinity.pin(pid, pin_to) if pid else None
     try:
-        with opener.open("http://ip-api.com/json?fields=query,timezone", timeout=10) as resp:
-            data = _json.loads(resp.read())
-            return {"ip": data.get("query") or None, "timezone": data.get("timezone") or None}
-    except Exception:
-        return {"ip": None, "timezone": None}
+        # Persistent context
+        if persistent_context:
+            if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
+                from_options = {**from_options, 'no_viewport': True}
+            # The persistent context is created by the launch itself, so its media
+            # features come from these options rather than from new_context().
+            from_options = {
+                **{k: v for k, v in STOCK_MEDIA_DEFAULTS.items() if k not in from_options},
+                **from_options,
+            }
+            context = playwright.firefox.launch_persistent_context(**from_options)
+            return sync_attach_vd(context, virtual_display)
+
+        # Browser
+        browser = playwright.firefox.launch(**from_options)
+        if no_viewport_default:
+            attach_no_viewport_default(browser)
+        attach_stock_media_defaults(browser)
+        attach_desktop_only_warning(browser)
+        return sync_attach_vd(browser, virtual_display)
+    finally:
+        if pid:
+            cpu_affinity.restore(pid, previous)
+
+
+def _resolve_proxy_geo(proxy: Dict[str, str]) -> Tuple[str, str]:
+    """The proxy's exit IP and timezone."""
+    return proxy_exit_geo(Proxy(**proxy).as_string())
 
 
 def NewContext(
@@ -164,27 +175,31 @@ def NewContext(
     """
     Creates a new browser context with a unique fingerprint identity.
 
-    Each context gets its own real fingerprint preset
-    with unique seeds for audio, canvas, and font spacing noise. All values are applied
+    Each context gets its own identity (navigator, screen, WebGL, fonts, voices),
+    drawn by fpgen unless a preset is given, with its own audio noise seed. All values are applied
     via addInitScript so they self-destruct before page scripts can detect them.
 
     Parameters:
         browser: A Browser instance from NewBrowser or Camoufox.
-        preset: A specific fingerprint preset dict to use. If None, picks randomly.
-        os: Target OS for preset selection ("windows", "macos", "linux").
-        ff_version: Firefox version string for UA patching.
-        webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
+        preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
+        os: Target OS for the drawn identity ("windows", "macos", "linux").
+        ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
+        webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+            Unless webrtc_ip and timezone_id are both given, they are looked up from the
+            proxy's exit IP; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
+    # The drawn UA carries fpgen's Firefox version, which must not disagree with
+    # the browser the page is actually talking to.
+    ff_version = ff_version or browser.version.split('.', 1)[0]
+
     # Auto-derive WebRTC IP and timezone from proxy's exit IP when not explicitly provided
     if proxy and (not webrtc_ip or "timezone_id" not in context_kwargs):
-        geo = _resolve_proxy_geo(proxy)
-        if not webrtc_ip:
-            webrtc_ip = geo["ip"]
-        if "timezone_id" not in context_kwargs and geo["timezone"]:
-            context_kwargs["timezone_id"] = geo["timezone"]
+        exit_ip, timezone = _resolve_proxy_geo(proxy)
+        webrtc_ip = webrtc_ip or exit_ip
+        context_kwargs.setdefault("timezone_id", timezone)
 
     fp = generate_context_fingerprint(preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip)
 

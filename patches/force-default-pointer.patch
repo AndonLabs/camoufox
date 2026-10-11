@@ -1,31 +1,57 @@
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
-index cc86d1abf6..bfc4d0f1d8 100644
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
-@@ -372,24 +372,10 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
+@@ -408,34 +433,41 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
+     // that we don't need to care about ResistFingerprinting.
+     if (bc->TouchEventsOverride() == dom::TouchEventsOverride::Enabled) {
+       return PointerCapabilities::Coarse;
+     }
+   }
  
    // The default value for Desktop is mouse-type pointer, and for Android
    // a coarse pointer.
 -  const PointerCapabilities kDefaultCapabilities =
  #ifdef ANDROID
 -      PointerCapabilities::Coarse;
--#else
--      PointerCapabilities::Fine | PointerCapabilities::Hover;
-+      return PointerCapabilities::Coarse;
- #endif
++  return PointerCapabilities::Coarse;
+ #else
++  // Report the desktop default rather than whatever the host toolkit
++  // advertises, so the capability set never varies with the machine the
++  // browser happens to be running on.
++  PointerCapabilities capabilities =
+       PointerCapabilities::Fine | PointerCapabilities::Hover;
+-#endif
 -  if (aDocument->ShouldResistFingerprinting(
 -          RFPTarget::CSSPointerCapabilities)) {
 -    return kDefaultCapabilities;
 -  }
--
+ 
 -  int32_t intValue;
 -  nsresult rv = LookAndFeel::GetInt(aID, &intValue);
 -  if (NS_FAILED(rv)) {
 -    return kDefaultCapabilities;
--  }
--
++  // A touchscreen laptop still drives a fine, hovering *primary* pointer --
++  // its trackpad -- and the digitizer only ever joins the `any-pointer` set.
++  // Keeping that split is the whole point: a spoofed maxTouchPoints paired
++  // with `(pointer: coarse)` would claim a phone, while the accompanying
++  // desktop UA said otherwise.
++  if (aID == LookAndFeel::IntID::AllPointerCapabilities) {
++    if (auto maxTouchPoints =
++            MaskConfig::GetUint32("navigator.maxTouchPoints")) {
++      if (maxTouchPoints.value() > 0) {
++        capabilities |= PointerCapabilities::Coarse;
++      }
++    }
+   }
+ 
 -  return static_cast<PointerCapabilities>(intValue);
-+  return PointerCapabilities::Fine | PointerCapabilities::Hover;
++  return capabilities;
++#endif
  }
  
  PointerCapabilities Gecko_MediaFeatures_PrimaryPointerCapabilities(
+     const Document* aDocument) {
+   return GetPointerCapabilities(aDocument,
+                                 LookAndFeel::IntID::PrimaryPointerCapabilities);
+ }
+ 

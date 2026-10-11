@@ -1,0 +1,216 @@
+# Upstream Playwright tests Camoufox cannot pass by design.
+#
+# This is not a list of things that are broken. It is a list of places where
+# Camoufox deliberately breaks upstream's automation contract, because that
+# contract is exactly what an anti-bot system looks for. Every entry names the
+# behaviour and why it is intentional.
+#
+# The bar for adding an entry:
+#
+#   A test fails because Camoufox does something differently ON PURPOSE, and a
+#   fix would mean giving up the thing the fork exists to do.
+#
+# "It was failing when I got here" is not a reason -- that is a regression
+# wearing a disguise. `ci/summarize.py` rejects an entry with an empty reason,
+# so this file cannot quietly turn into a list of unexplained failures.
+#
+# A reason is not evidence, though. The first version of this file inherited all
+# nine `tests/async/*.disabled` files from the vendored suite and gave each a
+# plausible-sounding justification without running any of them: of the 202 tests
+# that skipped, 193 passed. A written reason made them look verified, which is
+# worse than leaving them bare.
+#
+# So `ci/run_skiplist_audit.py` now runs every entry with the skiplist disabled
+# and FAILS THE BUILD if a skipped test passes. An entry has to keep earning its
+# place. Add one only after watching it fail.
+#
+# Entries are matched against pytest node ids. `module` skips a whole file;
+# `test` skips one node id; `pattern` is a substring match, used sparingly.
+#
+# The suite runs with main-world execution enabled (see ci/pw_camoufox_plugin.py),
+# which is why the list is as short as it is -- roughly 37 tests that would
+# otherwise fail on "X is not defined" pass without needing an entry here.
+
+schema: 1
+
+skip:
+  # --- synthesized input -----------------------------------------------------
+  #
+  # Camoufox routes every synthesized mouse and wheel event through the
+  # humanization chokepoint in additions/juggler/input/MouseDispatch.js: real
+  # trajectories, real timings, trusted events.
+  #
+  # That breaks far less than this section used to claim. test_click.py,
+  # test_check.py, test_fill.py, test_focus.py, test_dispatch_event.py and
+  # test_element_handle.py were skipped wholesale -- 160 tests -- and all of
+  # them pass. The last two, test_click.py's stable-position tests, were blamed
+  # on humanized travel time; they failed because every animation finished at
+  # once, so the element Playwright waited on never moved. With animations on
+  # stock timing (instantAnimations is now opt-in) they pass too.
+  #
+  # See docs/input-dispatch.md. tests/patches/humanize-mouse-trajectory.py and
+  # tests/patches/input-ack-backstop.py assert the behaviour that replaces them.
+
+  - test: tests/async/test_keyboard.py::test_should_send_proper_codes_while_typing
+    reason: >-
+      Typing "!" on a US layout takes Shift, and upstream asserts the three events
+      it dispatches for the character alone, with shiftKey false throughout. A
+      page listening to keydown therefore sees a character no keyboard could have
+      produced. Camoufox presses Shift around the shifted character, so the page
+      sees "Keydown: Shift ShiftLeft 16 [Shift]" before it and shiftKey true on
+      the character's own events. The character's own key/code/keyCode are
+      unchanged (! Digit1 49); what upstream asserts is the absence of the Shift.
+
+  - test: tests/async/test_keyboard.py::test_should_press_plus
+    reason: >-
+      The same auto-Shift, reached through keyboard.press("+") rather than
+      type(). Listed separately because dropping auto-Shift would have to unskip
+      both.
+
+  # --- client certificates the BROWSER has to present ------------------------
+  #
+  # Not the whole module. Playwright offers client certs two ways, and only one
+  # of them goes through the browser:
+  #
+  #   playwright.request.new_context(client_certificates=...)  -> the Node driver
+  #       does the TLS handshake itself. Works: both tests using it pass.
+  #   browser.new_context(client_certificates=...)             -> the BROWSER does
+  #       the handshake, and this build has no client-cert support to do it with.
+  #
+  # Listed per test rather than per module because a module entry hid that
+  # distinction -- and the audit caught it, in CI, one run after it was written.
+  # Worth recording why it was written: all five fail on a local machine whose
+  # Node/OpenSSL rejects the fixture server outright ("wrong version number"),
+  # which looked like uniform absence of support. CI is the authority here.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context
+    reason: >-
+      browser.new_context(client_certificates=...) needs the browser to present a
+      certificate during the TLS handshake. The Camoufox build has no client-cert
+      support, so the server never sees one and the page never renders the
+      "certificate was issued by" text the test asserts.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The same browser-side handshake, with the certificate passed as bytes
+      rather than a path.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The same browser-side handshake, through a persistent context.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context
+    reason: >-
+      The sync mirror of the browser-side handshake above. Listed separately so
+      removing one when support lands cannot silently leave the other behind.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The sync mirror, certificate passed as bytes.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The sync mirror, through a persistent context.
+
+  # --- upstream expectations that encode a stock-Firefox quirk ---------------
+  #
+  # These two are not places Camoufox is worse than Firefox. They are places the
+  # upstream test bakes in something specific to the *stock* browser, which the
+  # fork deliberately does not reproduce. Both were reproduced against the built
+  # binary and read in upstream's source before being listed here -- neither is
+  # on this list because it was failing and looked plausible.
+
+  - test: tests/async/test_worker.py::test_workers_should_format_number_using_context_locale
+    replaced-by: tests/camoufox/test_worker_locale.py
+    reason: >-
+      Asserts that a worker does NOT inherit the context locale. Upstream marks
+      this with a link to playwright#38919 and expects "10,000.2" -- en-US --
+      from a context created with locale="ru-RU", because stock Firefox applies
+      Playwright's locale override to the page and not to its workers. Camoufox
+      sets the locale below that layer, so a worker sees it too and formats
+      "10 000,2", which is what a genuinely ru-RU Firefox prints. Matching
+      upstream here would mean reintroducing a main-thread/worker locale
+      disagreement -- a free signal for anything that bothers to look in both.
+
+  - test: tests/async/test_network.py::test_request_headers_should_work
+    replaced-by: tests/camoufox/test_user_agent_token.py
+    reason: >-
+      Asserts "Firefox" appears in the User-Agent. The bare binary advertises its
+      own build token ("... Gecko/20100101 Camoufox/<version>"); the Python
+      package replaces it with "Firefox/<version>" on the wire and in
+      navigator.userAgent as part of injecting a fingerprint, and this suite
+      drives the bare binary through plain Playwright. The replacement asserts
+      what this layer can actually promise -- a Gecko UA carrying one of the two
+      tokens, and the same one in the header as in the DOM.
+
+  # --- the popup blocker -----------------------------------------------------
+  #
+  # Firefox blocks window.open() that is not called while handling user input.
+  # Playwright and geckodriver both ship that blocker OFF, and the difference is
+  # one bit of page JS with no permission and nothing to wait for, so Camoufox
+  # keeps Firefox's default and lifts it only for the driver's own evaluate
+  # (nsIDocShell.driverPopupsAllowed; patches/popup-blocker-parity.patch,
+  # tests/patches/popup-blocker-parity.py, sundial ls-popup-blocker).
+  #
+  # page.evaluate(() => window.open(...)) therefore still works, which is what
+  # nearly every popup test in the suite does. This one is the exception.
+
+  - test: tests/async/test_browsercontext.py::test_page_event_should_have_an_opener
+    reason: >-
+      The fixture it navigates to, /popup/window-open.html, calls window.open()
+      from the PAGE's own script at load, with no user gesture. Stock Firefox
+      returns null there and opens nothing, so no page event arrives and
+      popup.opener() has nothing to assert. Upstream can rely on it only because
+      Playwright's Firefox ships dom.disable_open_during_load=false. Every other
+      popup test in the suite goes through page.evaluate and still passes.
+
+  - test: tests/async/test_popup.py::test_should_work_with_fake_clicking_target__blank_and_rel_noopener
+    reason: >-
+      A scripted `a.click()` on a <a target=_blank> link, which carries no user
+      activation, so stock Firefox blocks the popup and upstream can only assert
+      one because Playwright's Firefox ships the blocker off. Camoufox's driver
+      door does not reach this case either: it is a content-process docShell
+      flag and link retargeting is decided in the parent (see
+      patches/popup-blocker-parity.patch). page.click() still works -- it
+      synthesizes a real click, which grants a real activation -- and so does
+      page.evaluate(() => window.open(...)).
+
+  # --- scrollbars in an emulated viewport --------------------------------------
+  #
+  # Upstream's headless Firefox hides content scrollbars with an agent style
+  # sheet, which a page can read back, so Camoufox leaves them to the platform
+  # look-and-feel (additions/juggler/components/Juggler.js). These tests were
+  # still passing only because Juggler put every viewport context into
+  # Responsive Design Mode, whose overlay scrollbars take no width. It no longer
+  # does unless isMobile is set, as in Playwright's own Juggler since
+  # microsoft/playwright#41859 (additions/juggler/TargetRegistry.js, guard
+  # tests/patches/viewport-no-rdm.py). The suite launches the bare binary
+  # headless on Linux, which draws classic 12 px scrollbars, so a 500 px wide
+  # grid.html page lays out 488 px of content, as stock Firefox does.
+
+  - test: tests/async/test_element_handle.py::test_bounding_box
+    reason: >-
+      grid.html in a 500x500 viewport: beside a 12 px classic scrollbar nine
+      50 px boxes fit per row, not ten, so box 13 is at x=150 rather than the
+      x=100 upstream measures with no scrollbar width.
+
+  - test: tests/sync/test_element_handle.py::test_bounding_box
+    reason: >-
+      The sync twin of tests/async/test_element_handle.py::test_bounding_box:
+      box 13 is at x=150 beside a classic scrollbar, not 100.
+
+  - test: tests/async/test_locators.py::test_locators_should_return_bounding_box
+    reason: >-
+      The same grid.html measurement through a locator: x=150 beside a 12 px
+      classic scrollbar, not the 100 upstream measures with none.
+
+  - test: tests/sync/test_locators.py::test_locators_should_return_bounding_box
+    reason: >-
+      The sync twin of the locator bounding-box test: x=150 beside a classic
+      scrollbar, not 100.
+
+  - test: tests/async/test_screenshot.py::test_should_screenshot_with_mask
+    reason: >-
+      Compares a 500x500 grid.html screenshot with a golden image that has no
+      scrollbar. Here the page draws the classic scrollbar stock Firefox draws,
+      and that strip differs (5339 pixels).

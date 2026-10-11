@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 import orjson
 import rich_click as click
 
-from .pkgman import INSTALL_DIR, OS_NAME, Version, rprint, unzip
+from .pkgman import INSTALL_DIR, OS_NAME, Version, rprint, unzip, verify_sha256
 
 BROWSERS_DIR: Path = INSTALL_DIR / "browsers"
 CONFIG_FILE: Path = INSTALL_DIR / "config.json"
@@ -121,14 +121,6 @@ def latest_per_build(versions: List[Dict]) -> List[Dict]:
         key=lambda v: (v['version'], v.get('created_at') or ""),
         reverse=True,
     )
-
-
-def get_cached_repo_names() -> List[str]:
-    """
-    Get list of repo names in cache
-    """
-    cache = load_repo_cache()
-    return [r['name'] for r in cache.get('repos', [])]
 
 
 def get_repo_name(github_repo: str) -> str:
@@ -331,6 +323,20 @@ def get_active_path() -> Optional[Path]:
     config = load_config()
     active = config.get('active_version')
 
+    # A released library launches the build it was released with, whatever
+    # happens to be marked active, unless the user explicitly chose otherwise.
+    from .browser_pin import effective_pin, matches
+
+    pin = effective_pin(config)
+    if pin:
+        for inst in list_installed():
+            if matches(pin, inst.repo_name, inst.version.version or '', inst.version.build):
+                if active != inst.relative_path:
+                    config['active_version'] = inst.relative_path
+                    save_config(config)
+                return inst.path
+        return None
+
     if active:
         path = INSTALL_DIR / active
         if path.exists() and (path / 'version.json').exists():
@@ -420,6 +426,14 @@ def install_versioned(fetcher, replace: bool = False) -> bool:
 
         with tempfile.NamedTemporaryFile() as temp_file:
             fetcher.download_file(temp_file, fetcher.url)
+
+            expected_sha = (
+                fetcher._selected_version.sha256
+                if fetcher._selected_version
+                else getattr(fetcher, "installed_sha256", None)
+            )
+            verify_sha256(temp_file, expected_sha, desc=f"Camoufox v{fetcher.verstr}")
+
             rprint(f'Extracting Camoufox: {install_path}')
             unzip(temp_file, str(install_path))
 

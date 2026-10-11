@@ -4,17 +4,25 @@
 /mozilla-unified
 dist/
 bin/
-launch
-launch.exe
 
 
 # Internal testing
 /extra-docs
 pythonlib/test*
 !pythonlib/tests/
-jsonvv/test*
 /.vscode
 /bundle/fonts/extra
+
+# The font bundle is a release asset, not repo content: ~2.1 GB extracted,
+# ~770 MB as .tar.xz, and an xz archive cannot be delta-compressed, so tracking
+# it would append the whole thing to history on every font change. It is pinned
+# by scripts/data/font-bundle.json (asset name + size + sha256) and fetched with
+# `make fetch-fonts`. Only the compressed archive is kept; bundle/fonts/ is
+# extracted on demand.
+/bundle/fonts/
+/bundle/fonts-bundle-*.tar.xz
+/bundle/*.tar.xz.part
+/bundle/langpacks/
 pythonlib/*.png
 scripts/*.png
 scripts/test*
@@ -22,6 +30,7 @@ scripts/test*
 .idea
 /tests/*.disabled
 k8s/
+camoufox-*.*.*/
 
 # Old data
 _old/
@@ -35,11 +44,11 @@ wget-log
 
 # Python interface
 venv/
+venv[0-9]*/
 __pycache__/
 *.pyc
 *.mmdb
 pythonlib-dev/
-run-pw-dev.py
 
 # Closed source patches
 private
@@ -59,7 +68,6 @@ closedsrc
 /application.ini
 /platform.ini
 /camoufox.cfg
-/camoucfg.jvv
 /chrome.css
 /properties.json
 /removed-files
@@ -78,3 +86,11 @@ node_modules/
 proxies.txt
 checks-bundle.js
 .env
+
+# Auto-update harness scratch space (evidence, fetched suites, build logs)
+.harness-work/
+
+# CI scratch space (results, junit, the sealed sundial report). Never
+# committed: this is where a stealth run's output lands, and an evidence
+# file in a public repository is permanent.
+.ci-work/

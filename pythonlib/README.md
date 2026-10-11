@@ -7,7 +7,7 @@
 </div>
 
 > [!NOTE]
-> All the the latest documentation is avaliable [here](https://camoufox.com/python).
+> All the latest documentation is available [here](https://camoufox.com/python).
 
 ---
 
@@ -15,7 +15,7 @@
 
 This Python library wraps around Playwright's API to help automatically generate & inject unique device characteristics (OS, CPU info, navigator, fonts, headers, screen dimensions, viewport size, WebGL, addons, etc.) into Camoufox.
 
-It uses [BrowserForge](https://github.com/daijro/browserforge) under the hood to generate fingerprints that mimic the statistical distribution of device characteristics in real-world traffic.
+It uses [fpgen](https://github.com/scrapfly/fingerprint-generator) under the hood to generate fingerprints that mimic the statistical distribution of device characteristics in real-world traffic.
 
 In addition, it will also calculate your target geolocation, timezone, and locale to avoid proxy protection ([see demo](https://i.imgur.com/UhSHfaV.png)).
 
@@ -31,19 +31,15 @@ pip install -U camoufox[geoip]
 
 The `geoip` parameter is optional, but heavily recommended if you are using proxies. It will download an extra dataset to determine the user's longitude, latitude, timezone, country, & locale.
 
-Next, download the Camoufox browser:
+The dataset is [GeoIP All-in-One](https://github.com/daijro/geoip-all-in-one), which merges several IP databases and is rebuilt weekly. Camoufox fetches the newest build and refreshes it once it is a week old.
 
-**Windows**
+Next, download the Camoufox browser:
 
 ```bash
 camoufox fetch
 ```
 
-**MacOS & Linux**
-
-```bash
-python3 -m camoufox fetch
-```
+`fetch` also installs fpgen's model, pinned by sha256, into fpgen's package directory. Otherwise the first generated fingerprint installs it. Run `fetch` as that directory's owner if the browser will run as another user, e.g. while building a Docker image.
 
 To uninstall, run `camoufox remove`.
 
@@ -75,7 +71,7 @@ camoufox gui
 
 ---
 
-## CLI Mananger
+## CLI Manager
 
 #### Demonstration
 
@@ -131,9 +127,19 @@ Synced 26 versions from 2 repos.
 
 <hr width=50>
 
+### Which browser build is used
+
+Each camoufox release is paired with the one browser build it was built and tested with. By default, `camoufox fetch` installs exactly that build and every launch uses it. That holds even when other builds are installed, and even when the paired build is a prerelease (a prerelease of this package pairs with a prerelease browser). Upgrading the package therefore never runs a browser it was not tested with. Run `camoufox fetch` after upgrading to install the new pairing.
+
+Choosing a channel or a build with `camoufox set` overrides the pairing. The choice is kept, and a launch warns that the build differs from the paired one. `camoufox set --release` goes back to the paired build.
+
+A development checkout (installed from the repository, not from PyPI) is paired with nothing and follows its channel, `official/stable` by default.
+
+<hr width=50>
+
 ### `set`
 
-Choose a version channel or pin a specific version. Can also be called with a specifier to activate directly.
+Choose a version channel or pin a specific version, overriding the paired build. Can also be called with a specifier to activate directly.
 
 Interactive selector:
 
@@ -141,10 +147,10 @@ Interactive selector:
 > camoufox set
 ```
 
-You can also pass a specifier to pin a specific version or choose a channel to follow directly. This will pull the latest stable version from the official repo on `camoufox fetch`.
+You can also pass a specifier to pin a specific version or choose a channel to follow directly. Following `official/stable` pulls the latest stable version from the official repo on `camoufox fetch`:
 
 ```bash
-> camoufox set official/stable  # Default setting
+> camoufox set official/stable
 ```
 
 Follow latest prerelease version from the official repo, if applicable:
@@ -159,6 +165,12 @@ Pin a specific version:
 > camoufox set official/stable/134.0.2-beta.20
 ```
 
+Go back to the build this release is paired with:
+
+```bash
+> camoufox set --release
+```
+
 <hr width=50>
 
 ### `active`
@@ -166,8 +178,8 @@ Pin a specific version:
 Prints the current active version string:
 
 ```bash
-> camoufox active  # Default channel is active
-official/stable
+> camoufox active  # A released package uses its paired build by default
+official/prerelease/156.0.1-beta.33 (1a2b3c4d) (paired with this release)
 ```
 
 ```bash
@@ -183,10 +195,10 @@ coryking/stable/142.0.1-fork.26 (not installed)
 
 ### `fetch`
 
-Install the latest version from the active channel. By default, this is official/stable. This will also automatically sync repository assets.
+Install the browser build this release is paired with, or, after `camoufox set`, the latest version from the chosen channel. This will also automatically sync repository assets.
 
 ```bash
-> camoufox fetch  # Install the latest in the channel
+> camoufox fetch  # Install the paired build (or the latest in the chosen channel)
 ```
 
 To download the latest from a different channel, or pin a version:
@@ -246,23 +258,22 @@ Display the Python package version, active browser version, channel, and update 
 ```bash
 > camoufox version
 Python Packages
-  Camoufox                    v0.5.0
-  Browserforge                v1.2.4
-  Apify Fingerprints          v0.10.0
-  Playwright                  v1.57.1.dev0+g732639b35.d20251217
+  Camoufox                    v0.5.7
+  fpgen                       v1.3.0
+  Playwright                  v1.62.0
 Browser
-  Active                      official/stable/135.0.1-beta.24
-  Current browser             v135.0.1-beta.24
+  Active                      official/stable/152.0.4-beta.31
+  Current browser             v152.0.4-beta.31
   Installed                   Yes
   Latest in official/stable?  Yes
   Last Sync                   2026-03-07 00:23
 GeoIP
-  Database                    MaxMind GeoLite2
+  Database                    GeoIP AIO by daijro
   Updated                     2026-03-07 00:24
 Storage
   Install path                /home/name/.cache/camoufox
   Browser(s) directory size   1.2 GB
-  GeoIP database size         40.7 MB
+  GeoIP database size         116.4 MB
   Config file                 /home/name/.cache/camoufox/config.json
   Repo cache                  /home/name/.cache/camoufox/repo_cache.json
 ```
@@ -303,4 +314,4 @@ Launch a remote Playwright server.
 
 ## Usage
 
-All of the latest stable documentation is avaliable at [camoufox.com/python](https://camoufox.com/python).
+All of the latest stable documentation is available at [camoufox.com/python](https://camoufox.com/python).

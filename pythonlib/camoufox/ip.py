@@ -1,12 +1,10 @@
 import re
-import warnings
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
-from urllib3.exceptions import InsecureRequestWarning
 
 from .exceptions import InvalidIP, InvalidProxy
 
@@ -41,10 +39,12 @@ class Proxy:
         if not schema:
             schema = 'http'
         result = f"{schema}://"
+        # Percent-encode the credentials: a raw `#`, `/`, `?` or `@` breaks the
+        # URL, and a raw `%XX` is decoded into a different password.
         if self.username:
-            result += f"{self.username}"
+            result += quote(self.username, safe='')
             if self.password:
-                result += f":{self.password}"
+                result += f":{quote(self.password, safe='')}"
             result += "@"
 
         result += url
@@ -78,11 +78,32 @@ def validate_ip(ip: str) -> None:
         raise InvalidIP(f"Invalid IP address: {ip}")
 
 
-@contextmanager
-def _suppress_insecure_warning():
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=InsecureRequestWarning)
-        yield
+def proxy_exit_geo(proxy: str) -> Tuple[str, str]:
+    """
+    The exit IP of `proxy` and that IP's timezone, looked up through the proxy.
+    Raises InvalidIP when the lookup fails: a context that silently kept the
+    host's WebRTC IP and timezone behind a proxy would be a leak.
+    """
+    try:
+        resp = requests.get(
+            "http://ip-api.com/json?fields=status,message,query,timezone",
+            proxies=Proxy.as_requests_proxy(proxy),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exception:
+        raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {exception}") from exception
+    if data.get("status") != "success" or not data.get("timezone"):
+        raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {data.get('message') or data}")
+    validate_ip(data["query"])
+    return data["query"], data["timezone"]
+
+
+PROXY_LOOKUP_FAILED = (
+    "Could not look up the proxy's exit IP and timezone. Pass webrtc_ip and "
+    "timezone_id explicitly to skip the lookup"
+)
 
 
 @lru_cache(maxsize=None)
@@ -104,13 +125,12 @@ def public_ip(proxy: Optional[str] = None) -> str:
     end_exception = None
     for url in URLS:
         try:
-            with _suppress_insecure_warning():
-                resp = requests.get(  # nosec
-                    url,
-                    proxies=Proxy.as_requests_proxy(proxy) if proxy else None,
-                    timeout=5,
-                    verify=False,
-                )
+            resp = requests.get(
+                url,
+                proxies=Proxy.as_requests_proxy(proxy) if proxy else None,
+                timeout=5,
+                verify=True,
+            )
             resp.raise_for_status()
             ip = resp.text.strip()
             validate_ip(ip)

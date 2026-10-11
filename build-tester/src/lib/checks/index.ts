@@ -7,20 +7,20 @@ export interface PhaseResult {
 }
 
 const SELF_DESTRUCT_FUNCTIONS = [
-  "setFontSpacingSeed",
   "setAudioFingerprintSeed",
-  "setCanvasSeed",
   "setTimezone",
   "setScreenDimensions",
   "setScreenColorDepth",
   "setNavigatorPlatform",
   "setNavigatorOscpu",
   "setNavigatorHardwareConcurrency",
+  "setNavigatorUserAgent",
   "setWebGLVendor",
   "setWebGLRenderer",
   "setFontList",
   "setSpeechVoices",
   "setWebRTCIPv4",
+  "setWebRTCIPv6",
 ];
 
 function runSelfDestructChecks(): Record<string, CheckResult> {

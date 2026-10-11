@@ -1,0 +1,71 @@
+<!doctype html><meta charset="utf-8"><title>Camoufox touch reference</title>
+<style>
+ body{font:14px system-ui;margin:0;padding:16px;background:#0f1310;color:#e8ebe2}
+ h2{font-size:15px;margin:18px 0 8px}
+ #pad{height:230px;border:2px dashed #5fb5ac;border-radius:10px;display:flex;
+      align-items:center;justify-content:center;color:#5fb5ac;font-size:17px;
+      touch-action:none;user-select:none;margin-bottom:12px}
+ textarea{width:100%;height:260px;background:#1b1f18;color:#cfe;border:1px solid #2e342a;
+          border-radius:8px;font:11px ui-monospace,monospace;padding:10px}
+ button{font:600 14px system-ui;padding:9px 16px;border-radius:7px;border:1px solid #5fb5ac;
+        background:#5fb5ac;color:#0f1310;cursor:pointer;margin-right:8px}
+ .n{color:#98a090;font-size:12px}
+</style>
+<h2>1. Static signals — captured automatically</h2>
+<div class="n" id="stat">reading…</div>
+<h2>2. Touch capture — please do these three, in order, inside the box</h2>
+<div class="n">a) one-finger tap &nbsp;·&nbsp; b) two-finger tap &nbsp;·&nbsp; c) one-finger drag across the box</div>
+<div id="pad">touch here</div>
+<button id="copy">Copy everything</button><button id="reset">Clear touches</button>
+<span class="n" id="count">0 events</span>
+<h2>3. Paste this back</h2>
+<textarea id="out" readonly></textarea>
+<script>
+function mq(q){return matchMedia(q).matches}
+var stat={
+ ua:navigator.userAgent, platform:navigator.platform, ffVersion:navigator.userAgent.match(/Firefox\/([\d.]+)/)?.[1],
+ maxTouchPoints:navigator.maxTouchPoints, ontouchstart:('ontouchstart' in window),
+ TouchEvent:typeof window.TouchEvent!=='undefined', Touch:typeof window.Touch!=='undefined',
+ createTouch:typeof document.createTouch==='function',
+ PointerEvent:typeof window.PointerEvent!=='undefined',
+ pointer_coarse:mq('(pointer: coarse)'), pointer_fine:mq('(pointer: fine)'), pointer_none:mq('(pointer: none)'),
+ anyPointer_coarse:mq('(any-pointer: coarse)'), anyPointer_fine:mq('(any-pointer: fine)'), anyPointer_none:mq('(any-pointer: none)'),
+ hover_hover:mq('(hover: hover)'), hover_none:mq('(hover: none)'),
+ anyHover_hover:mq('(any-hover: hover)'), anyHover_none:mq('(any-hover: none)'),
+ screen:screen.width+'x'+screen.height, avail:screen.availWidth+'x'+screen.availHeight,
+ dpr:devicePixelRatio, colorDepth:screen.colorDepth, hardwareConcurrency:navigator.hardwareConcurrency
+};
+document.getElementById('stat').textContent=JSON.stringify(stat,null,1);
+var log=[],t0=null;
+function rec(e){
+ if(t0===null)t0=performance.now();
+ var r={t:+(performance.now()-t0).toFixed(1),type:e.type};
+ if(e instanceof PointerEvent){
+   r.pointerType=e.pointerType; r.isPrimary=e.isPrimary; r.pressure=e.pressure;
+   r.width=e.width; r.height=e.height; r.tiltX=e.tiltX; r.tiltY=e.tiltY; r.twist=e.twist;
+   r.pointerId=e.pointerId; r.buttons=e.buttons;
+ }
+ if(window.TouchEvent&&e instanceof TouchEvent){
+   r.touches=e.touches.length; r.changed=e.changedTouches.length;
+   r.pts=[].map.call(e.changedTouches,function(t){return {
+     id:t.identifier,radiusX:t.radiusX,radiusY:t.radiusY,force:t.force,rotationAngle:t.rotationAngle};});
+ }
+ if(e.type.indexOf('mouse')===0){ r.buttons=e.buttons; r.detail=e.detail; }
+ log.push(r); render();
+}
+['pointerdown','pointermove','pointerup','pointercancel',
+ 'touchstart','touchmove','touchend','touchcancel',
+ 'mousedown','mousemove','mouseup','click'].forEach(function(t){
+  document.getElementById('pad').addEventListener(t,rec,{passive:true});
+});
+function render(){
+ document.getElementById('count').textContent=log.length+' events';
+ document.getElementById('out').value=JSON.stringify({static:stat,events:log},null,1);
+}
+render();
+document.getElementById('copy').onclick=function(){
+ var o=document.getElementById('out'); o.select(); document.execCommand('copy');
+ this.textContent='Copied';
+};
+document.getElementById('reset').onclick=function(){log=[];t0=null;render();};
+</script>
